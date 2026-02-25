@@ -43,6 +43,8 @@ pub struct AppState {
     pub pg_client: PostgresServiceClient<Channel>,
     /// gRPC client stub for the InfluxDB service.
     pub influx_client: InfluxDbServiceClient<Channel>,
+    /// Direct Postgres connection pool for dashboard queries (optional).
+    pub db_pool: Option<sqlx::PgPool>,
 }
 
 // ------------------------------------------------------------------ //
@@ -83,9 +85,26 @@ async fn main() -> Result<()> {
     let pg_channel = Channel::from_shared(pg_addr)?.connect_lazy();
     let influx_channel = Channel::from_shared(influx_addr)?.connect_lazy();
 
+    // Optionally connect directly to Postgres for dashboard queries.
+    let db_pool = match std::env::var("DATABASE_URL").ok() {
+        Some(url) => {
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(5)
+                .connect(&url)
+                .await
+                .ok();
+            if pool.is_some() {
+                info!("Dashboard Postgres pool connected");
+            }
+            pool
+        }
+        None => None,
+    };
+
     let state = Arc::new(AppState {
         pg_client: PostgresServiceClient::new(pg_channel),
         influx_client: InfluxDbServiceClient::new(influx_channel),
+        db_pool,
     });
 
     let app = Router::new()
@@ -107,6 +126,10 @@ async fn main() -> Result<()> {
         // Time-series (InfluxDB) endpoints
         .route("/data/timeseries/query", post(handlers::query_timeseries))
         .route("/data/timeseries", delete(handlers::delete_timeseries))
+        // Dashboard endpoints
+        .route("/dashboard/attention", get(handlers::dashboard_attention))
+        .route("/dashboard/ticker", get(handlers::dashboard_ticker))
+        .route("/dashboard/edges", get(handlers::dashboard_edges))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

@@ -4,6 +4,8 @@ members = [
     "coordinator",
     "postgres-service",
     "influxdb-service",
+    "database-supervisor",
+    "event-router",
 ]
 resolver = "2"
 
@@ -52,3 +54,14 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 # Config / env
 config = "0.14"
 dotenvy = "0.15"
+
+# Message queue
+lapin = "2"
+
+# Hashing
+sha2 = "0.10"
+hex = "0.4"
+crc32fast = "1"
+
+# Async trait
+async-trait = "0.1"

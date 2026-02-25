@@ -3,11 +3,13 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
+use sqlx::Row;
+use chrono::{DateTime, Utc};
 use tracing::{error, info};
 
 use crate::{
@@ -342,4 +344,206 @@ pub async fn delete_timeseries(
 
 pub async fn health() -> impl IntoResponse {
     (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
+}
+
+// ------------------------------------------------------------------ //
+//  Dashboard endpoints                                                //
+// ------------------------------------------------------------------ //
+
+/// GET /dashboard/attention — plants needing attention (WARN or CRITICAL)
+pub async fn dashboard_attention(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let pool = match &state.db_pool {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "dashboard database not configured"})),
+            );
+        }
+    };
+
+    let rows = sqlx::query(r#"
+        SELECT
+            p.id::text         AS plant_id,
+            p.display_name,
+            p.location,
+            pt.name            AS plant_type_name,
+            pcs.severity,
+            pcs.updated_at,
+            pcs.soil_moisture,
+            pcs.ambient_light_lux,
+            pcs.ambient_humidity_rh,
+            pcs.ambient_temp_c
+        FROM plant_current_state pcs
+        JOIN plant p    ON p.id = pcs.plant_id
+        JOIN plant_type pt ON pt.id = p.plant_type_id
+        WHERE pcs.severity IN ('WARN', 'CRITICAL')
+          AND p.is_active = TRUE
+        ORDER BY pcs.severity DESC, pcs.updated_at DESC
+    "#)
+    .fetch_all(pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let data: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "plant_id":            r.try_get::<String, _>("plant_id").ok(),
+                        "display_name":        r.try_get::<String, _>("display_name").ok(),
+                        "location":            r.try_get::<Option<String>, _>("location").ok().flatten(),
+                        "plant_type_name":     r.try_get::<String, _>("plant_type_name").ok(),
+                        "severity":            r.try_get::<String, _>("severity").ok(),
+                        "updated_at":          r.try_get::<DateTime<Utc>, _>("updated_at").ok().map(|t: DateTime<Utc>| t.to_rfc3339()),
+                        "soil_moisture":       r.try_get::<Option<f64>, _>("soil_moisture").ok().flatten(),
+                        "ambient_light_lux":   r.try_get::<Option<f64>, _>("ambient_light_lux").ok().flatten(),
+                        "ambient_humidity_rh": r.try_get::<Option<f64>, _>("ambient_humidity_rh").ok().flatten(),
+                        "ambient_temp_c":      r.try_get::<Option<f64>, _>("ambient_temp_c").ok().flatten(),
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!({"plants": data})))
+        }
+        Err(e) => {
+            error!(error = %e, "dashboard_attention query failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        }
+    }
+}
+
+/// GET /dashboard/ticker?limit=N — latest ticker events
+pub async fn dashboard_ticker(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let pool = match &state.db_pool {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "dashboard database not configured"})),
+            );
+        }
+    };
+
+    let limit: i64 = params
+        .get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50_i64)
+        .min(200);
+
+    let rows = sqlx::query(r#"
+        SELECT
+            id,
+            occurred_at,
+            plant_id::text AS plant_id,
+            device_uid,
+            severity,
+            message
+        FROM ticker_event
+        ORDER BY occurred_at DESC
+        LIMIT $1
+    "#)
+    .bind(limit)
+    .fetch_all(pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let data: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id":          r.try_get::<i64, _>("id").ok(),
+                        "occurred_at": r.try_get::<DateTime<Utc>, _>("occurred_at").ok().map(|t: DateTime<Utc>| t.to_rfc3339()),
+                        "plant_id":    r.try_get::<Option<String>, _>("plant_id").ok().flatten(),
+                        "device_uid":  r.try_get::<Option<String>, _>("device_uid").ok().flatten(),
+                        "severity":    r.try_get::<String, _>("severity").ok(),
+                        "message":     r.try_get::<String, _>("message").ok(),
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!({"events": data})))
+        }
+        Err(e) => {
+            error!(error = %e, "dashboard_ticker query failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        }
+    }
+}
+
+/// GET /dashboard/edges?ttl_seconds=T — edge node online/offline status
+pub async fn dashboard_edges(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let pool = match &state.db_pool {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "dashboard database not configured"})),
+            );
+        }
+    };
+
+    let ttl_seconds: i64 = params
+        .get("ttl_seconds")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300_i64);
+
+    let rows = sqlx::query(r#"
+        SELECT
+            id::text AS id,
+            device_uid,
+            firmware_version,
+            last_seen_at,
+            is_active,
+            CASE
+                WHEN last_seen_at IS NULL THEN FALSE
+                WHEN last_seen_at >= NOW() - ($1 * INTERVAL '1 second') THEN TRUE
+                ELSE FALSE
+            END AS online
+        FROM device
+        WHERE is_active = TRUE
+        ORDER BY last_seen_at DESC NULLS LAST
+    "#)
+    .bind(ttl_seconds)
+    .fetch_all(pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let data: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id":               r.try_get::<String, _>("id").ok(),
+                        "device_uid":       r.try_get::<String, _>("device_uid").ok(),
+                        "firmware_version": r.try_get::<Option<String>, _>("firmware_version").ok().flatten(),
+                        "last_seen_at":     r.try_get::<Option<DateTime<Utc>>, _>("last_seen_at").ok().flatten().map(|t: DateTime<Utc>| t.to_rfc3339()),
+                        "is_active":        r.try_get::<bool, _>("is_active").ok(),
+                        "online":           r.try_get::<bool, _>("online").ok(),
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!({"devices": data})))
+        }
+        Err(e) => {
+            error!(error = %e, "dashboard_edges query failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        }
+    }
 }
