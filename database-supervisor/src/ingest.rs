@@ -109,10 +109,10 @@ async fn process_envelope(
 
     // Per-metric severity
     let readings: &[(&str, Option<f64>)] = &[
-        ("soil_moisture",       reading_opt(envelope.soil_moisture)),
-        ("ambient_light_lux",   reading_opt(envelope.ambient_light_lux)),
-        ("ambient_humidity_rh", reading_opt(envelope.ambient_humidity_rh)),
-        ("ambient_temp_c",      reading_opt(envelope.ambient_temp_c)),
+        ("soil_moisture",       envelope.soil_moisture),
+        ("ambient_light_lux",   envelope.ambient_light_lux),
+        ("ambient_humidity_rh", envelope.ambient_humidity_rh),
+        ("ambient_temp_c",      envelope.ambient_temp_c),
     ];
 
     let mut metric_severities: HashMap<String, ThreshSeverity> = HashMap::new();
@@ -150,10 +150,10 @@ async fn process_envelope(
     tags.insert("plant_type_id".to_string(), plant_type_id.to_string());
 
     let mut fields: HashMap<String, f64> = HashMap::new();
-    if let Some(v) = reading_opt(envelope.soil_moisture)       { fields.insert("soil_moisture".into(), v); }
-    if let Some(v) = reading_opt(envelope.ambient_light_lux)   { fields.insert("ambient_light_lux".into(), v); }
-    if let Some(v) = reading_opt(envelope.ambient_humidity_rh) { fields.insert("ambient_humidity_rh".into(), v); }
-    if let Some(v) = reading_opt(envelope.ambient_temp_c)      { fields.insert("ambient_temp_c".into(), v); }
+    if let Some(v) = envelope.soil_moisture       { fields.insert("soil_moisture".into(), v); }
+    if let Some(v) = envelope.ambient_light_lux   { fields.insert("ambient_light_lux".into(), v); }
+    if let Some(v) = envelope.ambient_humidity_rh { fields.insert("ambient_humidity_rh".into(), v); }
+    if let Some(v) = envelope.ambient_temp_c      { fields.insert("ambient_temp_c".into(), v); }
 
     if !fields.is_empty() {
         let point = TelemetryPoint {
@@ -195,10 +195,10 @@ async fn process_envelope(
     .bind(plant_id_db)
     .bind(&envelope.ingest_id)
     .bind(overall_severity.as_str())
-    .bind(reading_opt(envelope.soil_moisture))
-    .bind(reading_opt(envelope.ambient_light_lux))
-    .bind(reading_opt(envelope.ambient_humidity_rh))
-    .bind(reading_opt(envelope.ambient_temp_c))
+    .bind(envelope.soil_moisture)
+    .bind(envelope.ambient_light_lux)
+    .bind(envelope.ambient_humidity_rh)
+    .bind(envelope.ambient_temp_c)
     .bind(metric_sev_json)
     .execute(pool)
     .await?;
@@ -292,11 +292,6 @@ async fn record_ledger(pool: &PgPool, env: &TelemetryEnvelope, result: &str) -> 
     .execute(pool)
     .await?;
     Ok(())
-}
-
-/// Convert a proto f64 field to Option<f64>, treating 0.0 as absent.
-fn reading_opt(v: f64) -> Option<f64> {
-    if v == 0.0 { None } else { Some(v) }
 }
 
 // ------------------------------------------------------------------ //

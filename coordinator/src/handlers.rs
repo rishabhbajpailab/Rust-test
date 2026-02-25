@@ -397,7 +397,7 @@ pub async fn dashboard_attention(
                         "location":            r.try_get::<Option<String>, _>("location").ok().flatten(),
                         "plant_type_name":     r.try_get::<String, _>("plant_type_name").ok(),
                         "severity":            r.try_get::<String, _>("severity").ok(),
-                        "updated_at":          r.try_get::<DateTime<Utc>, _>("updated_at").ok().map(|t: DateTime<Utc>| t.to_rfc3339()),
+                        "updated_at":          r.try_get::<DateTime<Utc>, _>("updated_at").ok().map(|t| t.to_rfc3339()),
                         "soil_moisture":       r.try_get::<Option<f64>, _>("soil_moisture").ok().flatten(),
                         "ambient_light_lux":   r.try_get::<Option<f64>, _>("ambient_light_lux").ok().flatten(),
                         "ambient_humidity_rh": r.try_get::<Option<f64>, _>("ambient_humidity_rh").ok().flatten(),
@@ -461,7 +461,7 @@ pub async fn dashboard_ticker(
                 .map(|r| {
                     serde_json::json!({
                         "id":          r.try_get::<i64, _>("id").ok(),
-                        "occurred_at": r.try_get::<DateTime<Utc>, _>("occurred_at").ok().map(|t: DateTime<Utc>| t.to_rfc3339()),
+                        "occurred_at": r.try_get::<DateTime<Utc>, _>("occurred_at").ok().map(|t| t.to_rfc3339()),
                         "plant_id":    r.try_get::<Option<String>, _>("plant_id").ok().flatten(),
                         "device_uid":  r.try_get::<Option<String>, _>("device_uid").ok().flatten(),
                         "severity":    r.try_get::<String, _>("severity").ok(),
@@ -530,7 +530,7 @@ pub async fn dashboard_edges(
                         "id":               r.try_get::<String, _>("id").ok(),
                         "device_uid":       r.try_get::<String, _>("device_uid").ok(),
                         "firmware_version": r.try_get::<Option<String>, _>("firmware_version").ok().flatten(),
-                        "last_seen_at":     r.try_get::<Option<DateTime<Utc>>, _>("last_seen_at").ok().flatten().map(|t: DateTime<Utc>| t.to_rfc3339()),
+                        "last_seen_at":     r.try_get::<Option<DateTime<Utc>>, _>("last_seen_at").ok().flatten().map(|t| t.to_rfc3339()),
                         "is_active":        r.try_get::<bool, _>("is_active").ok(),
                         "online":           r.try_get::<bool, _>("online").ok(),
                     })

@@ -83,10 +83,10 @@ async fn main() -> Result<()> {
                     plant_id:            msg.plant_id,
                     timestamp_ns:        msg.timestamp_ns,
                     seq:                 msg.seq,
-                    soil_moisture:       msg.soil_moisture.unwrap_or(0.0),
-                    ambient_light_lux:   msg.ambient_light_lux.unwrap_or(0.0),
-                    ambient_humidity_rh: msg.ambient_humidity_rh.unwrap_or(0.0),
-                    ambient_temp_c:      msg.ambient_temp_c.unwrap_or(0.0),
+                    soil_moisture:       msg.soil_moisture,
+                    ambient_light_lux:   msg.ambient_light_lux,
+                    ambient_humidity_rh: msg.ambient_humidity_rh,
+                    ambient_temp_c:      msg.ambient_temp_c,
                 };
 
                 if let Err(e) = tx.try_send(envelope) {

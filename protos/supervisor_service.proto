@@ -11,11 +11,12 @@ message TelemetryEnvelope {
     int64  timestamp_ns  = 4;
     uint32 seq           = 5;
 
-    // Sensor readings (NaN / absent means "not measured")
-    double soil_moisture        = 6;   // 0-100 %
-    double ambient_light_lux    = 7;
-    double ambient_humidity_rh  = 8;   // 0-100 %
-    double ambient_temp_c       = 9;
+    // Sensor readings — absent field means "not measured this cycle".
+    // Using proto3 optional so 0.0 is preserved as a legitimate reading.
+    optional double soil_moisture        = 6;   // 0–100 %
+    optional double ambient_light_lux    = 7;
+    optional double ambient_humidity_rh  = 8;   // 0–100 %
+    optional double ambient_temp_c       = 9;
 }
 
 message IngestTelemetryRequest {
