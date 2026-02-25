@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package influxdb_service;
+
+// A single time-series data point.
+message DataPoint {
+    // Measurement name (analogous to a table in relational DBs).
+    string measurement = 1;
+    // Tag set — indexed metadata (string → string).
+    map<string, string> tags = 2;
+    // Field set — the actual measurements (string → double).
+    map<string, double> fields = 3;
+    // Unix timestamp in nanoseconds. 0 means "use server time".
+    int64 timestamp_ns = 4;
+}
+
+// --- Write ---
+message WriteRequest {
+    repeated DataPoint points = 1;
+}
+
+message WriteResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+// --- Query ---
+message QueryRequest {
+    string measurement = 1;
+    // RFC3339 timestamps, e.g. "2024-01-01T00:00:00Z"
+    string start = 2;
+    string stop = 3;
+    // Optional tag filters (tag key → expected value).
+    map<string, string> tag_filters = 4;
+    // Maximum number of points to return (0 = unlimited).
+    uint32 limit = 5;
+}
+
+message QueryResponse {
+    repeated DataPoint points = 1;
+    bool success = 2;
+    string error = 3;
+}
+
+// --- Delete ---
+message DeleteRequest {
+    string measurement = 1;
+    // RFC3339 start / stop bounds for the delete range.
+    string start = 2;
+    string stop = 3;
+    // Optional tag predicate for scoped deletes.
+    map<string, string> tag_filters = 4;
+}
+
+message DeleteResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+service InfluxDbService {
+    rpc Write(WriteRequest)   returns (WriteResponse);
+    rpc Query(QueryRequest)   returns (QueryResponse);
+    rpc Delete(DeleteRequest) returns (DeleteResponse);
+}
