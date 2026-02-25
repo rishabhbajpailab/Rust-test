@@ -2,6 +2,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_files = &[
         "../protos/postgres_service.proto",
         "../protos/influxdb_service.proto",
+        "../protos/supervisor_service.proto",
     ];
     let include_dirs = &["../protos"];
 

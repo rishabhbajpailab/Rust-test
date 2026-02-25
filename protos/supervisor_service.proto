@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package supervisor_service;
+
+// A single telemetry reading from an ESP32-S3 device.
+message TelemetryEnvelope {
+    // Stable unique ID: hash(device_uid + seq + plant_id + timestamp_ns)
+    string ingest_id     = 1;
+    string device_uid    = 2;
+    string plant_id      = 3;   // UUID string
+    int64  timestamp_ns  = 4;
+    uint32 seq           = 5;
+
+    // Sensor readings — absent field means "not measured this cycle".
+    // Using proto3 optional so 0.0 is preserved as a legitimate reading.
+    optional double soil_moisture        = 6;   // 0–100 %
+    optional double ambient_light_lux    = 7;
+    optional double ambient_humidity_rh  = 8;   // 0–100 %
+    optional double ambient_temp_c       = 9;
+}
+
+message IngestTelemetryRequest {
+    repeated TelemetryEnvelope envelopes = 1;
+}
+
+enum IngestResult {
+    INGEST_RESULT_UNSPECIFIED = 0;
+    INGEST_RESULT_OK          = 1;
+    INGEST_RESULT_DUPLICATE   = 2;
+    INGEST_RESULT_ERROR       = 3;
+}
+
+// Severity level for a plant.
+enum Severity {
+    SEVERITY_UNSPECIFIED = 0;
+    SEVERITY_NORMAL      = 1;
+    SEVERITY_WARN        = 2;
+    SEVERITY_CRITICAL    = 3;
+}
+
+message ItemResult {
+    string       ingest_id = 1;
+    IngestResult result    = 2;
+    string       error     = 3;  // non-empty on ERROR
+}
+
+// Emitted when a plant transitions between severity bands.
+message StatusChange {
+    string   plant_id      = 1;
+    Severity prev_severity = 2;
+    Severity new_severity  = 3;
+    int64    occurred_at_ns = 4;
+}
+
+message IngestTelemetryResponse {
+    repeated ItemResult   results        = 1;
+    repeated StatusChange status_changes = 2;
+}
+
+service SupervisorService {
+    rpc IngestTelemetry(IngestTelemetryRequest) returns (IngestTelemetryResponse);
+}

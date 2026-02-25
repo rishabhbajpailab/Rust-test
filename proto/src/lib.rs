@@ -12,3 +12,8 @@ pub mod postgres_service {
 pub mod influxdb_service {
     tonic::include_proto!("influxdb_service");
 }
+
+/// gRPC types and stubs for the supervisor service.
+pub mod supervisor_service {
+    tonic::include_proto!("supervisor_service");
+}
