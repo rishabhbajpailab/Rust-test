@@ -11,12 +11,12 @@
 //! | `SUPERVISOR_ADDR`    | `http://[::1]:50053` |
 //! | `ROUTER_BATCH_SIZE`  | `64`                 |
 
+use std::mem;
 use std::sync::Arc;
 
 use anyhow::Result;
 use proto::supervisor_service::{
-    supervisor_service_client::SupervisorServiceClient,
-    IngestTelemetryRequest, TelemetryEnvelope,
+    supervisor_service_client::SupervisorServiceClient, IngestTelemetryRequest, TelemetryEnvelope,
 };
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
@@ -40,10 +40,9 @@ async fn main() -> Result<()> {
         .json()
         .init();
 
-    let udp_addr = std::env::var("ROUTER_UDP_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:7000".to_string());
-    let supervisor_addr = std::env::var("SUPERVISOR_ADDR")
-        .unwrap_or_else(|_| "http://[::1]:50053".to_string());
+    let udp_addr = std::env::var("ROUTER_UDP_ADDR").unwrap_or_else(|_| "0.0.0.0:7000".to_string());
+    let supervisor_addr =
+        std::env::var("SUPERVISOR_ADDR").unwrap_or_else(|_| "http://[::1]:50053".to_string());
     let batch_size: usize = std::env::var("ROUTER_BATCH_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -62,31 +61,30 @@ async fn main() -> Result<()> {
     let mut buf = vec![0u8; MAX_PACKET_SIZE];
     loop {
         let (len, peer) = match socket.recv_from(&mut buf).await {
-            Ok(v)  => v,
-            Err(e) => { error!(error = %e, "UDP recv_from error"); continue; }
+            Ok(v) => v,
+            Err(e) => {
+                error!(error = %e, "UDP recv_from error");
+                continue;
+            }
         };
 
         let bytes = &buf[..len];
 
         match codec::decode(bytes) {
             Ok(msg) => {
-                let id = ingest_id::compute(
-                    &msg.device_uid,
-                    &msg.plant_id,
-                    msg.seq,
-                    msg.timestamp_ns,
-                );
+                let id =
+                    ingest_id::compute(&msg.device_uid, &msg.plant_id, msg.seq, msg.timestamp_ns);
 
                 let envelope = TelemetryEnvelope {
-                    ingest_id:           id,
-                    device_uid:          msg.device_uid,
-                    plant_id:            msg.plant_id,
-                    timestamp_ns:        msg.timestamp_ns,
-                    seq:                 msg.seq,
-                    soil_moisture:       msg.soil_moisture,
-                    ambient_light_lux:   msg.ambient_light_lux,
+                    ingest_id: id,
+                    device_uid: msg.device_uid,
+                    plant_id: msg.plant_id,
+                    timestamp_ns: msg.timestamp_ns,
+                    seq: msg.seq,
+                    soil_moisture: msg.soil_moisture,
+                    ambient_light_lux: msg.ambient_light_lux,
                     ambient_humidity_rh: msg.ambient_humidity_rh,
-                    ambient_temp_c:      msg.ambient_temp_c,
+                    ambient_temp_c: msg.ambient_temp_c,
                 };
 
                 if let Err(e) = tx.try_send(envelope) {
@@ -119,7 +117,7 @@ async fn batch_sender(
                     }
                 }
                 Ok(None) => return,
-                Err(_)   => break,
+                Err(_) => break,
             }
         }
 
@@ -127,21 +125,22 @@ async fn batch_sender(
             continue;
         }
 
-        let req = IngestTelemetryRequest { envelopes: batch.clone() };
+        let req = IngestTelemetryRequest {
+            envelopes: mem::take(&mut batch),
+        };
         match client.ingest_telemetry(req).await {
             Ok(resp) => {
                 let inner = resp.into_inner();
                 info!(
-                    sent    = batch.len(),
+                    sent = inner.results.len(),
                     changes = inner.status_changes.len(),
                     "batch forwarded"
                 );
             }
             Err(e) => {
-                error!(error = %e, count = batch.len(), "gRPC IngestTelemetry failed");
+                error!(error = %e, "gRPC IngestTelemetry failed");
             }
         }
-
-        batch.clear();
+        batch = Vec::with_capacity(batch_size);
     }
 }
