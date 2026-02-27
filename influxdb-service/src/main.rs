@@ -62,7 +62,9 @@ fn to_line_protocol(pt: &DataPoint) -> String {
 }
 
 fn escape_lp(s: &str) -> String {
-    s.replace(' ', "\\ ").replace(',', "\\,").replace('=', "\\=")
+    s.replace(' ', "\\ ")
+        .replace(',', "\\,")
+        .replace('=', "\\=")
 }
 
 // ------------------------------------------------------------------ //
@@ -131,13 +133,12 @@ impl InfluxDbService for InfluxDbServiceImpl {
         match self.db.query_raw(&flux).await {
             Ok(records) => {
                 // Convert FluxRecord values into DataPoints.
+                let measurement = req.measurement;
                 let points: Vec<DataPoint> = records
                     .into_iter()
                     .map(|r| {
-                        let mut fields: std::collections::HashMap<String, f64> =
-                            std::collections::HashMap::new();
-                        let mut tags: std::collections::HashMap<String, String> =
-                            std::collections::HashMap::new();
+                        let mut fields = std::collections::HashMap::with_capacity(r.values.len());
+                        let mut tags = std::collections::HashMap::with_capacity(r.values.len());
                         for (k, v) in &r.values {
                             use influxdb2_structmap::value::Value;
                             match v {
@@ -160,7 +161,7 @@ impl InfluxDbService for InfluxDbServiceImpl {
                             }
                         }
                         DataPoint {
-                            measurement: req.measurement.clone(),
+                            measurement: measurement.clone(),
                             tags,
                             fields,
                             timestamp_ns: 0,
@@ -242,8 +243,7 @@ async fn main() -> Result<()> {
     .await?;
 
     let influx_token = secrets::get_secret(
-        &std::env::var("BWS_INFLUXDB_TOKEN_ID")
-            .unwrap_or_else(|_| "influxdb-token".to_string()),
+        &std::env::var("BWS_INFLUXDB_TOKEN_ID").unwrap_or_else(|_| "influxdb-token".to_string()),
         "INFLUXDB_TOKEN",
     )
     .await?;
@@ -255,8 +255,7 @@ async fn main() -> Result<()> {
     .await?;
 
     let influx_bucket = secrets::get_secret(
-        &std::env::var("BWS_INFLUXDB_BUCKET_ID")
-            .unwrap_or_else(|_| "influxdb-bucket".to_string()),
+        &std::env::var("BWS_INFLUXDB_BUCKET_ID").unwrap_or_else(|_| "influxdb-bucket".to_string()),
         "INFLUXDB_BUCKET",
     )
     .await?;

@@ -5,9 +5,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use proto::supervisor_service::{
-    supervisor_service_server::SupervisorService,
-    IngestResult, IngestTelemetryRequest, IngestTelemetryResponse, ItemResult, Severity,
-    StatusChange, TelemetryEnvelope,
+    supervisor_service_server::SupervisorService, IngestResult, IngestTelemetryRequest,
+    IngestTelemetryResponse, ItemResult, Severity, StatusChange, TelemetryEnvelope,
 };
 use sqlx::{PgPool, Row};
 use tonic::{Request, Response, Status};
@@ -33,7 +32,11 @@ impl SupervisorServiceImpl {
         sink: Arc<dyn TelemetrySink>,
         amqp_chan: Option<lapin::Channel>,
     ) -> Self {
-        Self { pool, sink, amqp_chan }
+        Self {
+            pool,
+            sink,
+            amqp_chan,
+        }
     }
 }
 
@@ -53,30 +56,26 @@ async fn process_envelope(
     };
 
     // Deduplication check
-    let existing: Option<String> = sqlx::query_scalar(
-        "SELECT result FROM telemetry_ingest_ledger WHERE ingest_id = $1",
-    )
-    .bind(&envelope.ingest_id)
-    .fetch_optional(pool)
-    .await?;
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT result FROM telemetry_ingest_ledger WHERE ingest_id = $1")
+            .bind(&envelope.ingest_id)
+            .fetch_optional(pool)
+            .await?;
 
     if existing.is_some() {
-        let _ = sqlx::query(
-            "UPDATE device SET last_seen_at = NOW() WHERE device_uid = $1",
-        )
-        .bind(&envelope.device_uid)
-        .execute(pool)
-        .await;
+        let _ = sqlx::query("UPDATE device SET last_seen_at = NOW() WHERE device_uid = $1")
+            .bind(&envelope.device_uid)
+            .execute(pool)
+            .await;
         return Ok((IngestResult::Duplicate, None));
     }
 
     // Plant lookup
-    let plant_row = sqlx::query(
-        "SELECT id, plant_type_id FROM plant WHERE id = $1 AND is_active = TRUE",
-    )
-    .bind(plant_id)
-    .fetch_optional(pool)
-    .await?;
+    let plant_row =
+        sqlx::query("SELECT id, plant_type_id FROM plant WHERE id = $1 AND is_active = TRUE")
+            .bind(plant_id)
+            .fetch_optional(pool)
+            .await?;
 
     let (plant_id_db, plant_type_id): (Uuid, Uuid) = match plant_row {
         Some(row) => (row.try_get("id")?, row.try_get("plant_type_id")?),
@@ -99,7 +98,7 @@ async fn process_envelope(
     let thresholds: Vec<MetricThreshold> = threshold_rows
         .iter()
         .map(|r| MetricThreshold {
-            metric:   r.try_get("metric").unwrap_or_default(),
+            metric: r.try_get("metric").unwrap_or_default(),
             warn_min: r.try_get("warn_min").unwrap_or(None),
             warn_max: r.try_get("warn_max").unwrap_or(None),
             crit_min: r.try_get("crit_min").unwrap_or(None),
@@ -109,19 +108,20 @@ async fn process_envelope(
 
     // Per-metric severity
     let readings: &[(&str, Option<f64>)] = &[
-        ("soil_moisture",       envelope.soil_moisture),
-        ("ambient_light_lux",   envelope.ambient_light_lux),
+        ("soil_moisture", envelope.soil_moisture),
+        ("ambient_light_lux", envelope.ambient_light_lux),
         ("ambient_humidity_rh", envelope.ambient_humidity_rh),
-        ("ambient_temp_c",      envelope.ambient_temp_c),
+        ("ambient_temp_c", envelope.ambient_temp_c),
     ];
 
-    let mut metric_severities: HashMap<String, ThreshSeverity> = HashMap::new();
+    let mut metric_severities: HashMap<String, ThreshSeverity> =
+        HashMap::with_capacity(readings.len());
     for (metric_name, opt_val) in readings {
         if let Some(val) = opt_val {
             let thresh = thresholds.iter().find(|t| t.metric == *metric_name);
             let sev = match thresh {
                 Some(t) => threshold::evaluate_metric(*val, t),
-                None    => ThreshSeverity::Normal,
+                None => ThreshSeverity::Normal,
             };
             metric_severities.insert(metric_name.to_string(), sev);
         }
@@ -130,12 +130,10 @@ async fn process_envelope(
     let overall_severity = threshold::aggregate_severity(metric_severities.values().copied());
 
     // Previous severity
-    let prev_row = sqlx::query(
-        "SELECT severity FROM plant_current_state WHERE plant_id = $1",
-    )
-    .bind(plant_id_db)
-    .fetch_optional(pool)
-    .await?;
+    let prev_row = sqlx::query("SELECT severity FROM plant_current_state WHERE plant_id = $1")
+        .bind(plant_id_db)
+        .fetch_optional(pool)
+        .await?;
 
     let prev_severity = prev_row
         .as_ref()
@@ -144,16 +142,24 @@ async fn process_envelope(
         .unwrap_or(ThreshSeverity::Normal);
 
     // Write to TelemetrySink
-    let mut tags = HashMap::new();
-    tags.insert("plant_id".to_string(),      envelope.plant_id.clone());
-    tags.insert("device_uid".to_string(),    envelope.device_uid.clone());
+    let mut tags = HashMap::with_capacity(3);
+    tags.insert("plant_id".to_string(), envelope.plant_id.clone());
+    tags.insert("device_uid".to_string(), envelope.device_uid.clone());
     tags.insert("plant_type_id".to_string(), plant_type_id.to_string());
 
-    let mut fields: HashMap<String, f64> = HashMap::new();
-    if let Some(v) = envelope.soil_moisture       { fields.insert("soil_moisture".into(), v); }
-    if let Some(v) = envelope.ambient_light_lux   { fields.insert("ambient_light_lux".into(), v); }
-    if let Some(v) = envelope.ambient_humidity_rh { fields.insert("ambient_humidity_rh".into(), v); }
-    if let Some(v) = envelope.ambient_temp_c      { fields.insert("ambient_temp_c".into(), v); }
+    let mut fields: HashMap<String, f64> = HashMap::with_capacity(readings.len());
+    if let Some(v) = envelope.soil_moisture {
+        fields.insert("soil_moisture".into(), v);
+    }
+    if let Some(v) = envelope.ambient_light_lux {
+        fields.insert("ambient_light_lux".into(), v);
+    }
+    if let Some(v) = envelope.ambient_humidity_rh {
+        fields.insert("ambient_humidity_rh".into(), v);
+    }
+    if let Some(v) = envelope.ambient_temp_c {
+        fields.insert("ambient_temp_c".into(), v);
+    }
 
     if !fields.is_empty() {
         let point = TelemetryPoint {
@@ -168,13 +174,12 @@ async fn process_envelope(
     }
 
     // Update plant_current_state
-    let metric_sev_json = serde_json::to_value(
+    let metric_sev_json = serde_json::Value::Object(
         metric_severities
             .iter()
-            .map(|(k, v)| (k.clone(), v.as_str()))
-            .collect::<HashMap<_, _>>(),
-    )
-    .unwrap_or_default();
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.as_str().to_owned())))
+            .collect(),
+    );
 
     sqlx::query(r#"
         INSERT INTO plant_current_state
@@ -217,10 +222,12 @@ async fn process_envelope(
         "Plant {} reading: severity={}",
         envelope.plant_id, overall_severity
     );
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         INSERT INTO ticker_event (plant_id, device_uid, severity, message, payload)
         VALUES ($1, $2, $3, $4, $5)
-    "#)
+    "#,
+    )
     .bind(plant_id_db)
     .bind(&envelope.device_uid)
     .bind(overall_severity.as_str())
@@ -232,9 +239,9 @@ async fn process_envelope(
     // Status change event
     let status_change = if overall_severity != prev_severity {
         let change = StatusChange {
-            plant_id:       envelope.plant_id.clone(),
-            prev_severity:  severity_to_proto(prev_severity) as i32,
-            new_severity:   severity_to_proto(overall_severity) as i32,
+            plant_id: envelope.plant_id.clone(),
+            prev_severity: severity_to_proto(prev_severity) as i32,
+            new_severity: severity_to_proto(overall_severity) as i32,
             occurred_at_ns: envelope.timestamp_ns,
         };
 
@@ -253,8 +260,7 @@ async fn process_envelope(
                     "plant.status_change",
                     lapin::options::BasicPublishOptions::default(),
                     &body,
-                    lapin::BasicProperties::default()
-                        .with_content_type("application/json".into()),
+                    lapin::BasicProperties::default().with_content_type("application/json".into()),
                 )
                 .await;
         }
@@ -271,19 +277,21 @@ async fn process_envelope(
 
 fn severity_to_proto(s: ThreshSeverity) -> Severity {
     match s {
-        ThreshSeverity::Normal   => Severity::Normal,
-        ThreshSeverity::Warn     => Severity::Warn,
+        ThreshSeverity::Normal => Severity::Normal,
+        ThreshSeverity::Warn => Severity::Warn,
         ThreshSeverity::Critical => Severity::Critical,
     }
 }
 
 async fn record_ledger(pool: &PgPool, env: &TelemetryEnvelope, result: &str) -> Result<()> {
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         INSERT INTO telemetry_ingest_ledger
             (ingest_id, device_uid, plant_id, timestamp_ns, result)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (ingest_id) DO NOTHING
-    "#)
+    "#,
+    )
     .bind(&env.ingest_id)
     .bind(&env.device_uid)
     .bind(Uuid::parse_str(&env.plant_id).ok())
@@ -305,23 +313,17 @@ impl SupervisorService for SupervisorServiceImpl {
         request: Request<IngestTelemetryRequest>,
     ) -> Result<Response<IngestTelemetryResponse>, Status> {
         let req = request.into_inner();
-        let mut results        = Vec::with_capacity(req.envelopes.len());
-        let mut status_changes = Vec::new();
+        let mut results = Vec::with_capacity(req.envelopes.len());
+        let mut status_changes = Vec::with_capacity(req.envelopes.len());
 
         for envelope in &req.envelopes {
-            match process_envelope(
-                envelope,
-                &self.pool,
-                &*self.sink,
-                self.amqp_chan.as_ref(),
-            )
-            .await
+            match process_envelope(envelope, &self.pool, &*self.sink, self.amqp_chan.as_ref()).await
             {
                 Ok((code, opt_change)) => {
                     results.push(ItemResult {
                         ingest_id: envelope.ingest_id.clone(),
-                        result:    code as i32,
-                        error:     String::new(),
+                        result: code as i32,
+                        error: String::new(),
                     });
                     if let Some(c) = opt_change {
                         status_changes.push(c);
@@ -331,8 +333,8 @@ impl SupervisorService for SupervisorServiceImpl {
                     error!(error = %e, ingest_id = %envelope.ingest_id, "ingest failed");
                     results.push(ItemResult {
                         ingest_id: envelope.ingest_id.clone(),
-                        result:    IngestResult::Error as i32,
-                        error:     e.to_string(),
+                        result: IngestResult::Error as i32,
+                        error: e.to_string(),
                     });
                 }
             }
@@ -343,6 +345,9 @@ impl SupervisorService for SupervisorServiceImpl {
             transitions = status_changes.len(),
             "IngestTelemetry complete"
         );
-        Ok(Response::new(IngestTelemetryResponse { results, status_changes }))
+        Ok(Response::new(IngestTelemetryResponse {
+            results,
+            status_changes,
+        }))
     }
 }

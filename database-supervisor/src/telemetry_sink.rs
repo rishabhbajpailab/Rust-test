@@ -48,7 +48,8 @@ impl FakeTelemetrySink {
 
     /// Consume all points written so far (drains the buffer).
     pub fn drain(&self) -> Vec<TelemetryPoint> {
-        self.points.lock().unwrap().drain(..).collect()
+        let mut guard = self.points.lock().unwrap();
+        std::mem::take(&mut *guard)
     }
 
     /// Non-destructive snapshot of currently collected points.
@@ -59,8 +60,9 @@ impl FakeTelemetrySink {
 
 #[async_trait]
 impl TelemetrySink for FakeTelemetrySink {
-    async fn write_points(&self, points: Vec<TelemetryPoint>) -> Result<()> {
-        self.points.lock().unwrap().extend(points);
+    async fn write_points(&self, mut points: Vec<TelemetryPoint>) -> Result<()> {
+        let mut guard = self.points.lock().unwrap();
+        guard.append(&mut points);
         Ok(())
     }
 }
@@ -70,7 +72,9 @@ impl TelemetrySink for FakeTelemetrySink {
 // ------------------------------------------------------------------ //
 
 fn escape_lp(s: &str) -> String {
-    s.replace(' ', "\\ ").replace(',', "\\,").replace('=', "\\=")
+    s.replace(' ', "\\ ")
+        .replace(',', "\\,")
+        .replace('=', "\\=")
 }
 
 /// Production sink that writes to InfluxDB 2.x via the `influxdb2` client.
@@ -94,37 +98,35 @@ impl InfluxTelemetrySink {
 #[async_trait]
 impl TelemetrySink for InfluxTelemetrySink {
     async fn write_points(&self, points: Vec<TelemetryPoint>) -> Result<()> {
-        let mut lines = Vec::with_capacity(points.len());
-        for p in &points {
-            let tags: String = p
-                .tags
-                .iter()
-                .map(|(k, v)| format!(",{}={}", escape_lp(k), escape_lp(v)))
-                .collect();
-            let fields: String = p
-                .fields
-                .iter()
-                .enumerate()
-                .map(|(i, (k, v))| {
-                    let sep = if i == 0 { "" } else { "," };
-                    format!("{}{k}={v}", sep)
-                })
-                .collect();
-            let line = if p.timestamp_ns != 0 {
-                format!(
-                    "{}{} {} {}",
-                    escape_lp(&p.measurement),
-                    tags,
-                    fields,
-                    p.timestamp_ns
-                )
-            } else {
-                format!("{}{} {}", escape_lp(&p.measurement), tags, fields)
-            };
-            lines.push(line);
-        }
+        let mut data = String::with_capacity(points.len() * 96);
+        for (idx, p) in points.iter().enumerate() {
+            if idx > 0 {
+                data.push('\n');
+            }
 
-        let data = lines.join("\n");
+            data.push_str(&escape_lp(&p.measurement));
+            for (k, v) in &p.tags {
+                data.push(',');
+                data.push_str(&escape_lp(k));
+                data.push('=');
+                data.push_str(&escape_lp(v));
+            }
+
+            data.push(' ');
+            for (field_idx, (k, v)) in p.fields.iter().enumerate() {
+                if field_idx > 0 {
+                    data.push(',');
+                }
+                data.push_str(k);
+                data.push('=');
+                data.push_str(&v.to_string());
+            }
+
+            if p.timestamp_ns != 0 {
+                data.push(' ');
+                data.push_str(&p.timestamp_ns.to_string());
+            }
+        }
         self.client
             .write_line_protocol(&self.org, &self.bucket, data)
             .await
