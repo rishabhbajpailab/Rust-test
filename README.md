@@ -1,172 +1,107 @@
 # Rust API Monorepo
 
-A Cargo workspace containing three Rust microservices that communicate internally via **gRPC / protobuf**:
+A Cargo workspace for a multi-service plant telemetry stack built in Rust.
 
-| Service | Role | Default port |
-|---------|------|--------------|
-| **coordinator** | HTTP gateway — receives client requests and fans them out to the backend services | `8080` |
-| **postgres-service** | gRPC service — structured CRUD against PostgreSQL | `50051` |
-| **influxdb-service** | gRPC service — time-series CRUD against InfluxDB 2.x | `50052` |
+## Services
 
----
+| Crate | Type | Purpose | Default bind |
+|---|---|---|---|
+| `coordinator` | HTTP API gateway (Axum) | Client-facing API, fans out requests to backend gRPC services | `0.0.0.0:8080` |
+| `postgres-service` | gRPC service (tonic) | Structured CRUD backed by PostgreSQL | `[::1]:50051` |
+| `influxdb-service` | gRPC service (tonic) | Time-series write/query/delete backed by InfluxDB 2.x | `[::1]:50052` |
+| `database-supervisor` | gRPC service (tonic) | Telemetry ingestion + threshold/status processing + optional RabbitMQ publishing | `[::1]:50053` |
+| `event-router` | UDP ingest daemon | Decodes ESP32-S3 telemetry and forwards batched envelopes to `database-supervisor` | `0.0.0.0:7000` |
+| `proto` | Shared library crate | Compiled protobuf/gRPC types and client/server stubs used by all services | n/a |
 
-## Architecture
+## Repository layout
 
-```
-Client (HTTP/JSON)
-       │
-       ▼
-  coordinator          ← Axum HTTP API
-  ├── POST /data        (structured + time-series, or either alone)
-  ├── GET/PUT/DELETE /data/structured/:table/:id
-  ├── POST /data/timeseries/query
-  └── DELETE /data/timeseries
-       │                     │
-       │ gRPC (protobuf)      │ gRPC (protobuf)
-       ▼                     ▼
-postgres-service       influxdb-service
-  (SQLx + PostgreSQL)   (influxdb2 + InfluxDB 2.x)
-```
-
-Internal service calls are serialised as **protobuf messages** over gRPC (tonic / prost).
-
----
-
-## Workspace layout
-
-```
+```text
 .
-├── Cargo.toml              # workspace manifest
-├── protos/
-│   ├── postgres_service.proto
-│   └── influxdb_service.proto
-├── proto/                  # shared crate: compiled gRPC stubs
-├── coordinator/            # HTTP gateway
-├── postgres-service/       # PostgreSQL CRUD gRPC service
-└── influxdb-service/       # InfluxDB time-series gRPC service
+├── Cargo.toml
+├── Makefile
+├── protos/                # protobuf definitions
+├── proto/                 # generated protobuf/gRPC Rust crate
+├── coordinator/           # HTTP gateway
+├── postgres-service/      # PostgreSQL CRUD service
+├── influxdb-service/      # InfluxDB time-series service
+├── database-supervisor/   # telemetry supervisor service
+└── event-router/          # UDP ingest + forwarder
 ```
 
----
+## Per-service documentation
 
-## Secrets management (Bitwarden)
+Each service now has a local README with service-specific setup and environment variables:
 
-Every service resolves its secrets through **Bitwarden Secrets Manager** when a
-`BWS_ACCESS_TOKEN` machine-account token is present in the environment.  If the
-token is absent the services fall back to plain environment variables, which is
-convenient for local development.
+- [`coordinator/README.md`](coordinator/README.md)
+- [`postgres-service/README.md`](postgres-service/README.md)
+- [`influxdb-service/README.md`](influxdb-service/README.md)
+- [`database-supervisor/README.md`](database-supervisor/README.md)
+- [`event-router/README.md`](event-router/README.md)
 
-### Required secrets
+## Build and release workflows
 
-#### postgres-service
-| Env var (fallback) | BWS secret-ID env var |
-|--------------------|-----------------------|
-| `DATABASE_URL` | `BWS_POSTGRES_DATABASE_URL_ID` |
+A root [`Makefile`](Makefile) provides repeatable release builds for x86_64 and ARM64, including a Raspberry Pi 5 optimized ARM profile.
 
-#### influxdb-service
-| Env var (fallback) | BWS secret-ID env var |
-|--------------------|-----------------------|
-| `INFLUXDB_URL` | `BWS_INFLUXDB_URL_ID` |
-| `INFLUXDB_TOKEN` | `BWS_INFLUXDB_TOKEN_ID` |
-| `INFLUXDB_ORG` | `BWS_INFLUXDB_ORG_ID` |
-| `INFLUXDB_BUCKET` | `BWS_INFLUXDB_BUCKET_ID` |
+### Prerequisites
 
-#### coordinator
-| Env var (fallback) | BWS secret-ID env var |
-|--------------------|-----------------------|
-| `POSTGRES_SERVICE_ADDR` | `BWS_POSTGRES_SERVICE_ADDR_ID` |
-| `INFLUXDB_SERVICE_ADDR` | `BWS_INFLUXDB_SERVICE_ADDR_ID` |
+- Rust toolchain via `rustup`
+- `protoc` installed
+- For ARM cross-compile on x86 hosts:
+  - target installed: `rustup target add aarch64-unknown-linux-gnu`
+  - cross-linker (example): `aarch64-linux-gnu-gcc`
 
-Set `BWS_API_URL` to override the Bitwarden API base URL (defaults to
-`https://api.bitwarden.com`).
-
----
-
-## Quick start (local development)
-
-### 1. Prerequisites
-
-- Rust 1.75+
-- `protoc` (Protocol Buffer compiler)
-- A running PostgreSQL instance
-- A running InfluxDB 2.x instance
-
-### 2. Configure environment
-
-Copy and edit the example env files:
+### Common commands
 
 ```bash
-cp postgres-service/.env.example postgres-service/.env
-cp influxdb-service/.env.example influxdb-service/.env
-cp coordinator/.env.example coordinator/.env
+# Show all build helpers
+make help
+
+# Rebuild generated protobuf/gRPC code (proto crate only)
+make proto
+
+# Host release build (all workspace packages)
+make build
+
+# Explicit x86_64 release build
+make build-x86
+
+# ARM64 release build (generic)
+make build-arm
+
+# ARM64 release build optimized for Raspberry Pi 5 (Cortex-A76)
+make build-arm-pi5
+
+# Build all targets
+make build-all
 ```
 
-### 3. Run services
+The Makefile sets `CARGO_INCREMENTAL=1` for build targets to speed up iterative local builds.
+
+### Raspberry Pi 5 optimization profile
+
+`make build-arm-pi5` applies known Rust/LLVM flags suited for Pi 5's Cortex-A76 CPU:
+
+- `-C target-cpu=cortex-a76`
+- `-C target-feature=+neon,+crc,+crypto`
+- `-C lto=thin`
+- `-C codegen-units=1`
+
+This is a strong default for throughput-focused release artifacts on Pi 5 8GB systems.
+
+## Running services locally
+
+Run each service in its own shell:
 
 ```bash
-# Terminal 1 — postgres-service
 cargo run -p postgres-service
-
-# Terminal 2 — influxdb-service
 cargo run -p influxdb-service
-
-# Terminal 3 — coordinator
+cargo run -p database-supervisor
+cargo run -p event-router
 cargo run -p coordinator
 ```
 
-### 4. Test the coordinator
+## Notes
 
-```bash
-# Write structured + time-series data in one request
-curl -X POST http://localhost:8080/data \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "structured": [
-      {"table": "events", "payload": {"name": "login", "user": "alice"}}
-    ],
-    "timeseries": [
-      {
-        "measurement": "cpu",
-        "tags": {"host": "web-01"},
-        "fields": {"usage": 42.5},
-        "timestamp_ns": 0
-      }
-    ]
-  }'
-
-# Read a structured record
-curl http://localhost:8080/data/structured/events/<id>
-
-# Query time-series data
-curl -X POST http://localhost:8080/data/timeseries/query \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "measurement": "cpu",
-    "start": "2024-01-01T00:00:00Z",
-    "stop": "2025-01-01T00:00:00Z"
-  }'
-```
-
----
-
-## Building
-
-```bash
-cargo build --release
-```
-
-Individual services:
-
-```bash
-cargo build -p coordinator --release
-cargo build -p postgres-service --release
-cargo build -p influxdb-service --release
-```
-
----
-
-## Proto definitions
-
-Proto files live in `protos/`.  The `proto` crate's `build.rs` compiles them
-at build time using `tonic-build` + `prost-build`.  Re-run `cargo build` after
-editing any `.proto` file.
-
+- `coordinator` can talk to backend services over gRPC using configured service addresses.
+- Secret resolution for some services supports Bitwarden Secrets Manager with environment fallback.
+- Protobuf definitions live in `protos/` and are compiled by the `proto` crate at build time.
